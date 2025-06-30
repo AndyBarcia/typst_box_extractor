@@ -2,26 +2,36 @@ use typst::layout::{Abs, Frame, FrameItem, PagedDocument, Point};
 use typst::text::{Glyph, TextItem};
 
 /// Returns an iterator over all words in a document, with their bounding boxes.
-pub fn words_with_boxes(document: &PagedDocument) -> impl Iterator<Item = (String, (f64, f64, f64, f64))> + '_ {
-    document.pages.iter().flat_map(|page| {
-        words_in_frame(&page.frame)
+pub fn words_with_boxes(
+    document: &PagedDocument,
+    include_whitespace: bool,
+    include_delimiters: bool
+) -> impl Iterator<Item = (String, (f64, f64, f64, f64))> + '_ {
+    document.pages.iter().flat_map(move |page| {
+        words_in_frame(&page.frame, include_whitespace, include_delimiters)
     })
 }
 
 /// Returns an iterator over all words in a frame, with their bounding boxes.
-fn words_in_frame(frame: &Frame) -> impl Iterator<Item = (String, (f64, f64, f64, f64))> + '_ {
-    frame.items().flat_map(|(pos, item)| {
+fn words_in_frame(
+    frame: &Frame,
+    include_whitespace: bool,
+    include_delimiters: bool
+) -> impl Iterator<Item = (String, (f64, f64, f64, f64))> + '_ {
+    frame.items().flat_map(move |(pos, item)| {
         let mut words = Vec::new();
+        // A full implementation would traverse the frame tree recursively.
+        // This simplified version handles one level of grouping.
         match item {
             FrameItem::Text(text_item) => {
-                process_text_item(pos, text_item, &mut words);
+                process_text_item(pos, text_item, &mut words, include_whitespace, include_delimiters);
             }
             FrameItem::Group(group) => {
-                // Recursively process groups
                 for (sub_pos, sub_item) in group.frame.items() {
                     if let FrameItem::Text(text_item) = sub_item {
-                        let point = *pos + *sub_pos;
-                        process_text_item(&point, text_item, &mut words);
+                        // Group positions are relative to the parent, so we add them.
+                        let absolute_pos = *pos + *sub_pos;
+                        process_text_item(&absolute_pos, text_item, &mut words, include_whitespace, include_delimiters);
                     }
                 }
             }
@@ -32,65 +42,77 @@ fn words_in_frame(frame: &Frame) -> impl Iterator<Item = (String, (f64, f64, f64
 }
 
 /// Processes a text item to extract words and their bounding boxes.
-fn process_text_item(pos: &Point, text_item: &TextItem, words: &mut Vec<(String, (f64, f64, f64, f64))>) {
-    let text = &text_item.text.to_string();
+/// This function splits words based on whitespace and punctuation.
+fn process_text_item(
+    pos: &Point, 
+    text_item: &TextItem, 
+    words: &mut Vec<(String, (f64, f64, f64, f64))>,
+    include_whitespace: bool,
+    include_delimiters: bool
+) {
+    let text = &text_item.text;
     let glyphs = &text_item.glyphs;
     if glyphs.is_empty() {
         return;
     }
 
-    let ascender = text_item.font.metrics().ascender.at(text_item.size).to_pt();
-    let descender = text_item.font.metrics().descender.at(text_item.size).to_pt();
+    let size = text_item.size;
+    let ascender = text_item.font.metrics().ascender.at(size).to_pt();
+    let descender = text_item.font.metrics().descender.at(size).to_pt();
     let height = ascender - descender;
 
-    let mut current_word_glyphs = Vec::new();
-    let mut current_word_start_x = 0.0;
-    let mut current_x = 0.0;
-    let mut last_text_idx: usize = 0;
+    // Index of the first glyph of the current word.
+    let mut word_start_glyph_index = 0;
+    // Horizontal position where the current word starts, relative to the TextItem's origin.
+    let mut word_start_x = Abs::zero();
+    // The current horizontal position, advancing with each glyph.
+    let mut current_x = Abs::zero();
 
     for (i, glyph) in glyphs.iter().enumerate() {
-        let glyph_text_start = glyph.range.start as usize;
+        let start_byte = glyph.range.start as usize;
+        let end_byte = glyph.range.end as usize;
+        let glyph_text = &text[start_byte..end_byte];
+    
+        // A glyph is a delimiter if all its characters are whitespace or punctuation.
+        let is_delimiter = !glyph_text.is_empty() && glyph_text.chars().all(|c| c.is_whitespace() || c.is_ascii_punctuation());
+        let is_whitespace = !glyph_text.is_empty() && glyph_text.chars().all(|c| c.is_whitespace());
 
-        if last_text_idx < glyph_text_start {
-            let text_chunk = &text[last_text_idx..glyph_text_start];
-            if text_chunk.chars().any(|c| c.is_whitespace() || c.is_ascii_punctuation()) && !current_word_glyphs.is_empty() {
-                finalize_word(pos, text, &current_word_glyphs, current_word_start_x, ascender, height, text_item.size, words);
-                current_word_glyphs.clear();
+        if is_delimiter {
+            // If we have a pending word, finalize it.
+            if word_start_glyph_index < i {
+                let word_glyphs = &glyphs[word_start_glyph_index..i];
+                finalize_word(pos, text, word_glyphs, word_start_x, ascender, height, size, words);
             }
+            // Finalize the delimiter or whitespace itself.
+            if (!is_whitespace || include_whitespace) && (is_whitespace || include_delimiters) {
+                finalize_word(pos, text, &[glyph.clone()], current_x, ascender, height, size, words);
+            }
+            // The next word will start after this delimiter glyph.
+            word_start_glyph_index = i + 1;
         }
 
-        if current_word_glyphs.is_empty() {
-            current_word_start_x = current_x;
-        }
+        // Advance the cursor by the width of the current glyph.
+        current_x += glyph.x_advance.at(size);
 
-        current_word_glyphs.push(glyph);
-        current_x += glyph.x_advance.at(text_item.size).to_pt();
-        last_text_idx = glyph.range.end as usize;
-
-        // Also check for trailing whitespace on the last glyph.
-        let next_glyph_text_start = if i < glyphs.len() - 1 {
-            glyphs[i + 1].range.start as usize
-        } else {
-            text.len()
-        };
-        let glyph_text_chunk = &text[last_text_idx..next_glyph_text_start];
-        if glyph_text_chunk.chars().any(|c| c.is_whitespace() || c.is_ascii_punctuation()) && !current_word_glyphs.is_empty() {
-            finalize_word(pos, text, &current_word_glyphs, current_word_start_x, ascender, height, text_item.size, words);
-            current_word_glyphs.clear();
+        if is_delimiter {
+            // The next word will start at the new cursor position.
+            word_start_x = current_x;
         }
     }
 
-    if !current_word_glyphs.is_empty() {
-        finalize_word(pos, text, &current_word_glyphs, current_word_start_x, ascender, height, text_item.size, words);
+    // Finalize any trailing word at the end of the text item.
+    if word_start_glyph_index < glyphs.len() {
+        let word_glyphs = &glyphs[word_start_glyph_index..];
+        finalize_word(pos, text, word_glyphs, word_start_x, ascender, height, size, words);
     }
 }
 
 /// Helper to construct the word string and bounding box and add it to the list.
-fn finalize_word<'a>(
+fn finalize_word(
     pos: &Point,
     text: &str,
-    word_glyphs: &[&'a Glyph],
-    word_start_x: f64,
+    word_glyphs: &[Glyph],
+    word_start_x: Abs,
     ascender: f64,
     height: f64,
     font_size: Abs,
@@ -99,16 +121,23 @@ fn finalize_word<'a>(
     if word_glyphs.is_empty() {
         return;
     }
+    
+    // Determine the text of the word from the glyph ranges.
     let start_byte = word_glyphs.first().unwrap().range.start as usize;
     let end_byte = word_glyphs.last().unwrap().range.end as usize;
-
     let word_text = &text[start_byte..end_byte];
 
-    let width: f64 = word_glyphs.iter().map(|g| g.x_advance.at(font_size).to_pt()).sum();
-    let x_offset = word_glyphs.first().unwrap().x_offset.at(font_size).to_pt();
+    // The width of the word is the sum of the advances of its glyphs.
+    let width: Abs = word_glyphs.iter().map(|g| g.x_advance.at(font_size)).sum();
 
-    let x = pos.x.to_pt() + word_start_x + x_offset;
+    // The glyph's x_offset is a slight adjustment to its position.
+    // We only need the one from the first glyph.
+    let x_offset = word_glyphs.first().unwrap().x_offset.at(font_size);
+
+    // Calculate the final bounding box coordinates.
+    let x = pos.x.to_pt() + word_start_x.to_pt() + x_offset.to_pt();
     let y = pos.y.to_pt() - ascender;
 
-    words.push((word_text.trim().to_string(), (x, y, width, height)));
+    // The splitting logic is now precise, so no .trim() is needed.
+    words.push((word_text.to_string(), (x, y, width.to_pt(), height)));
 }

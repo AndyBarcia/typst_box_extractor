@@ -5,7 +5,7 @@ Generates per-word bounding boxes for a Typst document, including PNG outputs an
 You can run the example with
 
 ```
-cargo run input.typ output.json --render output.png --render_boxes output_boxes.png
+cargo run input.typ output.json --include-delimiters --include-whitespace
 ```
 
 The rendered raw input is as follows

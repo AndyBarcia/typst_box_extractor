@@ -38,6 +38,14 @@ struct Cli {
     /// Optional: The path for the rendered PNG file.
     #[arg(long, default_value = "output_boxes.png")]
     render_boxes: PathBuf,
+
+    // Whether to include boxes of whitespace.
+    #[arg(long, action)]
+    include_whitespace: bool,
+
+    // Whether to include boxes of delimiters.
+    #[arg(long, action)]
+    include_delimiters: bool
 }
 
 fn main() {
@@ -55,7 +63,7 @@ fn main() {
 
     // Collect word and box data into our `WordBox` struct.
     let mut word_boxes: Vec<WordBox> = vec![];
-    for (word, (x, y, w, h)) in words_with_boxes(&document) {
+    for (word, (x, y, w, h)) in words_with_boxes(&document, cli.include_whitespace, cli.include_delimiters) {
         word_boxes.push(WordBox {
             word: word.to_string(),
             x,
