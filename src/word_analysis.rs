@@ -1,5 +1,6 @@
 use typst::layout::{Abs, Frame, FrameItem, PagedDocument, Point};
 use typst::text::{Glyph, TextItem};
+use typst::introspection::Tag;
 
 /// Returns an iterator over all words in a document, with their bounding boxes.
 pub fn words_with_boxes(
@@ -12,17 +13,35 @@ pub fn words_with_boxes(
     })
 }
 
-/// Returns an iterator over all words in a frame, with their bounding boxes.
+/// Returns an iterator over all words and groups in a frame, with their bounding boxes.
 fn words_in_frame(
     frame: &Frame,
     include_whitespace: bool,
     include_delimiters: bool
 ) -> impl Iterator<Item = (String, (f64, f64, f64, f64))> + '_ {
-    // Recursively traverse frames and collect words
+    #[derive(Debug,Clone)]
+    enum Element {
+        Word(String, (f64, f64, f64, f64)),
+        Group(String, (f64, f64, f64, f64), String), // (content, bbox, group_type)
+    }
+
+    // Helper to compute the union of two bounding boxes
+    fn union_bbox(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+        let (x1, y1, w1, h1) = a;
+        let (x2, y2, w2, h2) = b;
+        let left = x1.min(x2);
+        let top = y1.min(y2);
+        let right = (x1 + w1).max(x2 + w2);
+        let bottom = (y1 + h1).max(y2 + h2);
+        (left, top, right - left, bottom - top)
+    }
+
+    // The recursive traversal function
     fn traverse_frames(
         frame: &Frame,
         base_pos: Point,
-        words: &mut Vec<(String, (f64, f64, f64, f64))>,
+        output: &mut Vec<Element>,
+        group_stack: &mut Vec<(String, Vec<Element>)>, // (group_type, elements)
         include_whitespace: bool,
         include_delimiters: bool,
     ) {
@@ -30,38 +49,138 @@ fn words_in_frame(
             let absolute_pos = base_pos + *pos;
             match item {
                 FrameItem::Text(text_item) => {
+                    let mut words = Vec::new();
                     process_text_item(
                         &absolute_pos,
                         text_item,
-                        words,
+                        &mut words,
                         include_whitespace,
                         include_delimiters,
                     );
+
+                    // Add each word to the current group or top-level output
+                    for (text, bbox) in words {
+                        let element = Element::Word(text, bbox);
+                        if let Some((_, current_group)) = group_stack.last_mut() {
+                            current_group.push(element.clone());
+                        }
+                        output.push(element);
+                    }
                 }
                 FrameItem::Group(group) => {
-                    // Recurse into nested group
+                    // Start a new group for the nested frame
+                    group_stack.push(("group".to_string(), Vec::new()));
+                    
+                    // Recursively process the nested frame
                     traverse_frames(
                         &group.frame,
                         absolute_pos,
-                        words,
+                        output,
+                        group_stack,
                         include_whitespace,
                         include_delimiters,
                     );
+                    
+                    // Finalize the group
+                    if let Some((group_type, elements)) = group_stack.pop() {
+                        if !elements.is_empty() {
+                            // Compute the group's string and bounding box
+                            let mut full_text = String::new();
+                            let mut overall_bbox = None;
+
+                            for element in &elements {
+                                match element {
+                                    Element::Word(text, bbox) => {
+                                        full_text.push_str(text);
+                                        overall_bbox = overall_bbox
+                                            .map(|bb| union_bbox(bb, *bbox))
+                                            .or(Some(*bbox));
+                                    }
+                                    Element::Group(text, bbox, _) => {
+                                        full_text.push_str(text);
+                                        overall_bbox = overall_bbox
+                                            .map(|bb| union_bbox(bb, *bbox))
+                                            .or(Some(*bbox));
+                                    }
+                                }
+                            }
+
+                            if let Some(bbox) = overall_bbox {
+                                let group_element = Element::Group(full_text, bbox, group_type);
+                                // Add the group to the current group or top-level output
+                                if let Some((_, current_group)) = group_stack.last_mut() {
+                                    current_group.push(group_element);
+                                } else {
+                                    output.push(group_element);
+                                }
+                            }
+                        }
+                    }
+                }
+                FrameItem::Tag(Tag::Start(content)) => {
+                    // Use function name as group type
+                    let group_type = content.func().name().to_string();
+                    group_stack.push((group_type, Vec::new()));
+                }
+                FrameItem::Tag(Tag::End(_, _)) => {
+                    if let Some((group_type, elements)) = group_stack.pop() {
+                        if !elements.is_empty() {
+                            // Compute the group's string and bounding box
+                            let mut full_text = String::new();
+                            let mut overall_bbox = None;
+
+                            for element in &elements {
+                                match element {
+                                    Element::Word(text, bbox) => {
+                                        full_text.push_str(text);
+                                        overall_bbox = overall_bbox
+                                            .map(|bb| union_bbox(bb, *bbox))
+                                            .or(Some(*bbox));
+                                    }
+                                    Element::Group(text, bbox, _) => {
+                                        full_text.push_str(text);
+                                        overall_bbox = overall_bbox
+                                            .map(|bb| union_bbox(bb, *bbox))
+                                            .or(Some(*bbox));
+                                    }
+                                }
+                            }
+
+                            if let Some(bbox) = overall_bbox {
+                                let group_element = Element::Group(full_text, bbox, group_type);
+                                // Add the group to the current group or top-level output
+                                if let Some((_, current_group)) = group_stack.last_mut() {
+                                    current_group.push(group_element);
+                                } else {
+                                    output.push(group_element);
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
         }
     }
 
-    let mut words = Vec::new();
+    let mut output = Vec::new();
+    let mut group_stack = Vec::new();
     traverse_frames(
         frame,
         Point::zero(),
-        &mut words,
+        &mut output,
+        &mut group_stack,
         include_whitespace,
         include_delimiters,
     );
-    words.into_iter()
+
+    // Convert elements to (String, bbox, type) tuples
+    output.into_iter().map(|elem| {
+        match elem {
+            Element::Word(s, b) => (s,b), //(s, b, "word".to_string()),
+            Element::Group(s, b, t) => (s,b) //(s, b, t),
+        }
+    })
 }
 
 /// Processes a text item to extract words and their bounding boxes.
