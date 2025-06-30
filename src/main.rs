@@ -9,7 +9,7 @@ use clap::Parser;
 use serde::Serialize;
 use typst::layout::PagedDocument;
 
-use render::render_to_png;
+use render::{render_to_png,render_to_png_with_boxes};
 use word_analysis::words_with_boxes;
 use world::TypstWrapperWorld;
 
@@ -34,6 +34,10 @@ struct Cli {
     /// Optional: The path for the rendered PNG file.
     #[arg(short, long, default_value = "output.png")]
     render: PathBuf,
+
+    /// Optional: The path for the rendered PNG file.
+    #[arg(long, default_value = "output_boxes.png")]
+    render_boxes: PathBuf,
 }
 
 fn main() {
@@ -72,5 +76,11 @@ fn main() {
     let pixmap = render_to_png(&document, 1.0);
     let data: Vec<u8> = pixmap.encode_png().unwrap();
     fs::write(&cli.render, data).unwrap();
+    println!("✅ Rendered PNG to {}", cli.render.display());
+
+    // Render a PNG, now passing the word_boxes to draw them.
+    let pixmap_boxes = render_to_png_with_boxes(&document, 1.0, &word_boxes);
+    let data: Vec<u8> = pixmap_boxes.encode_png().unwrap();
+    fs::write(&cli.render_boxes, data).unwrap();
     println!("✅ Rendered PNG to {}", cli.render.display());
 }
