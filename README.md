@@ -1,1 +1,5 @@
-# typst_box_extractor
+# Typst box extractor
+
+```
+cargo run input.typ output.json --render output.png
+```
