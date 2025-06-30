@@ -38,8 +38,6 @@ impl TypstWrapperWorld {
         let root = PathBuf::from(root);
         let fonts = FontSearcher::new().include_system_fonts(true).search();
 
-        println!("{fonts:#?}");
-
         Self {
             library: LazyHash::new(Library::default()),
             book: LazyHash::new(fonts.book),

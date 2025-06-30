@@ -22,6 +22,7 @@ pub fn render_to_png_with_boxes(
     document: &PagedDocument,
     pixel_per_pt: f32,
     word_boxes: &[WordBox],
+    stroke: f32
 ) -> tiny_skia::Pixmap {
     for page in &document.pages {
         let limit = Abs::cm(100.0);
@@ -40,7 +41,7 @@ pub fn render_to_png_with_boxes(
 
     // Define the stroke properties
     let stroke = Stroke {
-        width: 1.0,
+        width: stroke,
         ..Default::default()
     };
 

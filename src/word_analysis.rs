@@ -18,27 +18,50 @@ fn words_in_frame(
     include_whitespace: bool,
     include_delimiters: bool
 ) -> impl Iterator<Item = (String, (f64, f64, f64, f64))> + '_ {
-    frame.items().flat_map(move |(pos, item)| {
-        let mut words = Vec::new();
-        // A full implementation would traverse the frame tree recursively.
-        // This simplified version handles one level of grouping.
-        match item {
-            FrameItem::Text(text_item) => {
-                process_text_item(pos, text_item, &mut words, include_whitespace, include_delimiters);
-            }
-            FrameItem::Group(group) => {
-                for (sub_pos, sub_item) in group.frame.items() {
-                    if let FrameItem::Text(text_item) = sub_item {
-                        // Group positions are relative to the parent, so we add them.
-                        let absolute_pos = *pos + *sub_pos;
-                        process_text_item(&absolute_pos, text_item, &mut words, include_whitespace, include_delimiters);
-                    }
+    // Recursively traverse frames and collect words
+    fn traverse_frames(
+        frame: &Frame,
+        base_pos: Point,
+        words: &mut Vec<(String, (f64, f64, f64, f64))>,
+        include_whitespace: bool,
+        include_delimiters: bool,
+    ) {
+        for (pos, item) in frame.items() {
+            let absolute_pos = base_pos + *pos;
+            match item {
+                FrameItem::Text(text_item) => {
+                    process_text_item(
+                        &absolute_pos,
+                        text_item,
+                        words,
+                        include_whitespace,
+                        include_delimiters,
+                    );
                 }
+                FrameItem::Group(group) => {
+                    // Recurse into nested group
+                    traverse_frames(
+                        &group.frame,
+                        absolute_pos,
+                        words,
+                        include_whitespace,
+                        include_delimiters,
+                    );
+                }
+                _ => {}
             }
-            _ => {}
         }
-        words.into_iter()
-    })
+    }
+
+    let mut words = Vec::new();
+    traverse_frames(
+        frame,
+        Point::zero(),
+        &mut words,
+        include_whitespace,
+        include_delimiters,
+    );
+    words.into_iter()
 }
 
 /// Processes a text item to extract words and their bounding boxes.

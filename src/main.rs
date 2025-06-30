@@ -45,7 +45,15 @@ struct Cli {
 
     // Whether to include boxes of delimiters.
     #[arg(long, action)]
-    include_delimiters: bool
+    include_delimiters: bool,
+
+    // Number of pixels per pt for rendering.
+    #[arg(short, long, default_value_t = 1.0)]
+    pixel_per_pt: f32,
+
+    // Number of pixels for the bbox stroke rendering.
+    #[arg(short, long, default_value_t = 1.0)]
+    bbox_stroke: f32
 }
 
 fn main() {
@@ -81,13 +89,13 @@ fn main() {
     println!("✅ Successfully wrote word analysis to {}", cli.output.display());
     
     // Render a PNG as before, using the path from the CLI args.
-    let pixmap = render_to_png(&document, 1.0);
+    let pixmap = render_to_png(&document, cli.pixel_per_pt);
     let data: Vec<u8> = pixmap.encode_png().unwrap();
     fs::write(&cli.render, data).unwrap();
     println!("✅ Rendered PNG to {}", cli.render.display());
 
     // Render a PNG, now passing the word_boxes to draw them.
-    let pixmap_boxes = render_to_png_with_boxes(&document, 1.0, &word_boxes);
+    let pixmap_boxes = render_to_png_with_boxes(&document, cli.pixel_per_pt, &word_boxes, cli.bbox_stroke);
     let data: Vec<u8> = pixmap_boxes.encode_png().unwrap();
     fs::write(&cli.render_boxes, data).unwrap();
     println!("✅ Rendered PNG to {}", cli.render.display());
